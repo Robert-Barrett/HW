@@ -1,22 +1,26 @@
 // Name: Robert Barrett
 // nvcc HW3.cu -o temp
-/*
- What to do:
- This is the solution to HW2. It works well for adding vectors using a single block.
- But why use just one block?
- We have thousands of CUDA cores, so we should use many blocks to keep the SMs (Streaming Multiprocessors) on the GPU busy.
 
- Extend this code so that, given a block size, it will set the grid size to handle "almost" any vector addition.
- I say "almost" because there is a limit to how many blocks you can use, but this number is very large. 
- We will address this limitation in the next HW.
 
- Hard-code the block size to be 256.
-*/
+
+
 
 // Include files
 #include <sys/time.h>
 #include <stdio.h>
-
+// error checking macro
+void cudaErrorCheck(const char *file, int line)
+{
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+    {
+        printf("\nCUDA ERROR: message = %s, File = %s, Line = %d\n",
+               cudaGetErrorString(error), file, line);
+        exit(0);
+    }
+}
+// shorthand so we can call the error checking macro easier; we will do this after each cuda call 
+#define cudaErrCheck(); cudaErrorCheck(__FILE__, __LINE__);
 // Defines
 #define N 11503 // Length of the vector
 
@@ -37,6 +41,7 @@ int  check(float*, int);
 long elaspedTime(struct timeval, struct timeval);
 void cleanUp();
 
+
 // This will be the layout of the parallel space we will be using.
 void setUpDevices()
 {
@@ -44,7 +49,7 @@ void setUpDevices()
 	BlockSize.y = 1;
 	BlockSize.z = 1;
 	
-	GridSize.x = (N + BlockSize.x - 1) / BlockSize.x;
+	GridSize.x = ((N-1))/256 + 1;;
 	GridSize.y = 1;
 	GridSize.z = 1;
 }
@@ -59,8 +64,11 @@ void allocateMemory()
 	
 	// Device "GPU" Memory
 	cudaMalloc(&A_GPU,N*sizeof(float));
+	cudaErrCheck();
 	cudaMalloc(&B_GPU,N*sizeof(float));
+	cudaErrCheck();
 	cudaMalloc(&C_GPU,N*sizeof(float));
+	cudaErrCheck();
 
 }
 
@@ -87,12 +95,12 @@ void addVectorsCPU(float *a, float *b, float *c, int n)
 // It adds vectors a and b on the GPU then stores result in vector c.
 __global__ void addVectorsGPU(float *a, float *b, float *c, int n)
 {
-	int id = blockIdx.x * blockDimx.x + threadIdx.x;
+	int id = threadIdx.x + blockIdx.x * blockDim.x;
 	
 	if(id < n)
 	{
 		c[id] = a[id] + b[id];
-
+		
 	}
 }
 
@@ -139,9 +147,14 @@ void CleanUp()
 	free(C_CPU);
 	
 	cudaFree(A_GPU); 
+	cudaErrCheck();
 	cudaFree(B_GPU); 
+	cudaErrCheck();
 	cudaFree(C_GPU);
+	cudaErrCheck();
 }
+
+
 
 int main()
 {
@@ -174,15 +187,20 @@ int main()
 	
 	// Copy Memory from CPU to GPU		
 	cudaMemcpyAsync(A_GPU, A_CPU, N*sizeof(float), cudaMemcpyHostToDevice);
+	cudaErrCheck();
 	cudaMemcpyAsync(B_GPU, B_CPU, N*sizeof(float), cudaMemcpyHostToDevice);
+	cudaErrCheck();
 	
 	addVectorsGPU<<<GridSize,BlockSize>>>(A_GPU, B_GPU ,C_GPU, N);
+	cudaErrCheck();
 	
 	// Copy Memory from GPU to CPU	
 	cudaMemcpyAsync(C_CPU, C_GPU, N*sizeof(float), cudaMemcpyDeviceToHost);
+	cudaErrCheck();
 
 	// Making sure the GPU and CPU wiat until each other are at the same place.
-	cudaDeviceSynchronize(void);
+	cudaDeviceSynchronize();
+	cudaErrCheck();
 	
 	gettimeofday(&end, NULL);
 	timeGPU = elaspedTime(start, end);
@@ -207,3 +225,4 @@ int main()
 	
 	return(0);
 }
+
