@@ -1,4 +1,4 @@
-// Name:
+// Name: Robert Barrett 
 // Vector Dot product on 1 block 
 // nvcc HW8.cu -o temp
 /*
