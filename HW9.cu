@@ -277,6 +277,11 @@ int main()
 		printf("\n\nDot product computed correctly on GPU!");
 		printf("\nCPU time: %ld microseconds", timeCPU);
 		printf("\nGPU time: %ld microseconds", timeGPU);
+		/*
+		If Speedup > 1 --> GPU is faster than CPU
+		If Speedup < 1 ---> CPU is faster than GPU 
+		Else, they run about the same speed 
+		*/
 		if(timeCPU > 0) {
 			printf("\nSpeedup: %.2fx", (float)timeCPU / timeGPU);
 		}
