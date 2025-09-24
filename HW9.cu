@@ -32,7 +32,7 @@ __global__ void dotProductGPU(const float*,const float*,const float*, int);
 bool  check(float, float, float);
 long elaspedTime(struct timeval, struct timeval);
 //Amount of memory cleaned up depends on the number of blocks
-void cleanUp(int numBlocks);
+void CleanUp(int numBlocks);
 
 // This check to see if an error happened in your CUDA code. It tell you what it thinks went wrong,
 // and what file and line it occured on.
@@ -61,19 +61,20 @@ void setUpDevices()
 }
 
 // Allocating the memory we will be using.
-void allocateMemory()
+void allocateMemory(int numBlocks)
 {	
 	// Host "CPU" memory.				
 	A_CPU = (float*)malloc(N*sizeof(float));
 	B_CPU = (float*)malloc(N*sizeof(float));
-	C_CPU = (float*)malloc(N*sizeof(float));
+    //// C_CPU will be used to receive partial sums from device (numBlocks floats)
+	C_CPU = (float*)malloc(numBlocks * sizeof(float));
 	
 	// Device "GPU" Memory
 	cudaMalloc(&A_GPU,N*sizeof(float));
 	cudaErrorCheck(__FILE__, __LINE__);
 	cudaMalloc(&B_GPU,N*sizeof(float));
 	cudaErrorCheck(__FILE__, __LINE__);
-	cudaMalloc(&C_GPU,N*sizeof(float));
+	cudaMalloc(&C_GPU,numBlocks * sizeof(float));
 	cudaErrorCheck(__FILE__, __LINE__);
 }
 
@@ -87,30 +88,47 @@ void innitialize()
 	}
 }
 
-// Adding vectors a and b on the CPU then stores result in vector c.
-void dotProductCPU(float *a, float *b, float *C_CPU, int n)
+
+// CPU version (computes full dot product and stores partials like original)
+void dotProductCPU(float *a, float *b, float *C_cpu_out, int n)
 {
 	for(int id = 0; id < n; id++)
 	{ 
-		C_CPU[id] = a[id] * b[id];
+		C_cpu_out[id] = a[id] * b[id];
 	}
-	
-	for(int id = 1; id < n; id++)
+	//reduce into C_cpu_out
+    float acc = 0.0f;
+	for(int id = 0; id < n; id++)
 	{ 
-		C_CPU[0] += C_CPU[id];
+		acc += C_cpu_out[id];
 	}
+    C_cpu_out[0] = acc;
 }
 
-// This is the kernel. It is the function that will run on the GPU.
-// It adds vectors a and b on the GPU then stores result in vector c.
-__global__ void dotProductGPU(float *a, float *b, float *c, int n)
+/*
+Each thread computes the product for global index idx (if idx < n)
+Stores the results into shared memory then does reduction within the blocks
+thread 0 writes the block's partial sum to c[blockIdx.x]
+*/
+__global__ void dotProductGPU(const float *a, const float *b, float *c, int n)
 {
-	int id = threadIdx.x;
+	// Dynamic Shared Memory
+    extern __shared__ float sharedData[];
+    int id = threadIdx.x;
+    int globalIdx = blockIdx.x * blockDim.x + id;
 	
-	c[id] = a[id] * b[id];
-	__syncthreads();
-		
-	int fold = blockDim.x;
+
+    // load product into shared memory (0 if the memory is out of range)
+	float val = 0.0f;
+    if(globalIdx < n)
+        val = a[globalIdx] * b[globalIdx];
+    sharedData[id] = val;
+    __syncthreads();
+   /*
+   In-block reduction 
+   Reduces blockDim.x 
+   */
+	int fold = blockDim.x / 2;
 	while(1 < fold)
 	{
 		if(fold%2 != 0)
@@ -162,19 +180,18 @@ long elaspedTime(struct timeval start, struct timeval end)
 }
 
 // Cleaning up memory after we are finished.
-void CleanUp()
+void CleanUp(int numBlocks)
 {
-	// Freeing host "CPU" memory.
-	free(A_CPU); 
-	free(B_CPU); 
-	free(C_CPU);
-	
-	cudaFree(A_GPU); 
-	cudaErrorCheck(__FILE__, __LINE__);
-	cudaFree(B_GPU); 
-	cudaErrorCheck(__FILE__, __LINE__);
-	cudaFree(C_GPU);
-	cudaErrorCheck(__FILE__, __LINE__);
+	if (A_CPU) free(A_CPU);
+    if (B_CPU) free(B_CPU);
+    if (C_CPU) free(C_CPU);
+
+    if (A_GPU) cudaFree(A_GPU);
+    cudaErrorCheck(__FILE__, __LINE__);
+    if (B_GPU) cudaFree(B_GPU);
+    cudaErrorCheck(__FILE__, __LINE__);
+    if (C_GPU) cudaFree(C_GPU);
+    cudaErrorCheck(__FILE__, __LINE__);
 }
 
 int main()
@@ -185,9 +202,13 @@ int main()
 	
 	// Setting up the GPU
 	setUpDevices();
+    ///compute number of blocks needed
+    int threadsPerBlock = BlockSize.x;
+    int numBlocks = (N + threadsPerBlock -1) / threadsPerBlock;
+    GridSize.x = numBlocks; 
 	
 	// Allocating the memory you will need.
-	allocateMemory();
+	allocateMemory(numBlocks);
 	
 	// Putting values in the vectors.
 	innitialize();
@@ -199,14 +220,14 @@ int main()
 	gettimeofday(&end, NULL);
 	timeCPU = elaspedTime(start, end);
 	
-	if(BlockSize.x < N)
+	/*if(BlockSize.x < N)
 	{
 		printf("\n\n Your vector size is larger than the block size.");
 		printf("\n Because we are only using one block this will not work.");
 		printf("\n Good Bye.\n\n");
 		exit(0);
 	}
-	
+	*/
 	// Adding on the GPU
 	gettimeofday(&start, NULL);
 	
@@ -216,13 +237,20 @@ int main()
 	cudaMemcpyAsync(B_GPU, B_CPU, N*sizeof(float), cudaMemcpyHostToDevice);
 	cudaErrorCheck(__FILE__, __LINE__);
 	
-	dotProductGPU<<<GridSize,BlockSize>>>(A_GPU, B_GPU, C_GPU, N);
+    //launch kernel with dynamic shared mem = threadsPerBlock * sizeof(float)
+	size_t sharedBytes = threadsPerBlock * sizeof(float);
+    dotProductGPU<<<numBlocks, threadsPerBlock, sharedBytes>>>(A_GPU, B_GPU, C_GPU, N);
 	cudaErrorCheck(__FILE__, __LINE__);
 	
 	// Copy Memory from GPU to CPU	
 	cudaMemcpyAsync(C_CPU, C_GPU, 1*sizeof(float), cudaMemcpyDeviceToHost);
 	cudaErrorCheck(__FILE__, __LINE__);
-	DotGPU = C_CPU[0]; // C_GPU was copied into C_CPU.
+	/// final reduction on CPU over numBlocks partial sums
+    DotGPU = 0.0f; // C_GPU was copied into C_CPU.
+    for (int i=0; i<numBlocks; ++i)
+    {
+        DotGPU +=C_CPU[i];
+    }
 	
 	// Making sure the GPU and CPU wiat until each other are at the same place.
 	cudaDeviceSynchronize();
@@ -244,11 +272,10 @@ int main()
 	}
 	
 	// Your done so cleanup your room.	
-	CleanUp();	
+	CleanUp(numBlocks);	
 	
 	// Making sure it flushes out anything in the print buffer.
 	printf("\n\n");
 	
 	return(0);
 }
-
