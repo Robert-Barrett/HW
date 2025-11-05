@@ -63,7 +63,7 @@ void setUpDevices()
 	
 	printf("\n Found %d GPUs. Using GPU 0 and GPU 1.\n", deviceCount);
   
-  //Calculate half sizes (first half gets extra element if odd)
+  //Calculate half sizes (first half gets extra element if odd). Doing it this way makes sure N_half1 + N_half2 = N
 	int N_half1 = (N + 1) / 2;// First half (gets extra element if N is odd)
 	int N_half2 = N / 2;// Second half
   
@@ -133,8 +133,9 @@ void addVectorsCPU(float *a, float *b, float *c, int n)
 	}
 }
 
-// This is the kernel. It is the function that will run on the GPU.
-// It adds vectors a and b on the GPU then stores result in vector c.
+// Because of both the way we are copying the memory later in main and splitting up the task between 2 GPUs, 
+// we don't need to change the kernel. Each GPU doesn't know which 'part' of the vector its working on, 
+// they get an adjacent, non-overlapping chunk of data and processes it. 
 __global__ void addVectorsGPU(float *a, float *b, float *c, int n)
 {
 	int id = blockIdx.x*blockDim.x + threadIdx.x;
@@ -247,7 +248,7 @@ int main()
 	// Adding on the GPU
 	gettimeofday(&start, NULL);
   
-	//Copy first half to GPU 0
+	//Copy first half to GPU 0. GPU 0 gets the first 'half' of the vector's elements
 	cudaSetDevice(0);
 	cudaErrorCheck(__FILE__, __LINE__);
 	cudaMemcpyAsync(A_GPU0, A_CPU, N_half1*sizeof(float), cudaMemcpyHostToDevice);
@@ -259,7 +260,7 @@ int main()
 	addVectorsGPU<<<GridSize0,BlockSize>>>(A_GPU0, B_GPU0, C_GPU0, N_half1);
 	cudaErrorCheck(__FILE__, __LINE__);
 
-  //Copy second half to GPU 1
+  //Copy second half to GPU 1. GPU 1 gets the second 'half' of the vector's elements. 
 	cudaSetDevice(1);
 	cudaErrorCheck(__FILE__, __LINE__);
 	cudaMemcpyAsync(A_GPU1, A_CPU + N_half1, N_half2*sizeof(float), cudaMemcpyHostToDevice);
