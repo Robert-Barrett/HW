@@ -1,6 +1,6 @@
 // Name:
 // Vector addition on two GPUs.
-// nvcc HW22.cu -o temp
+// nvcc HW22a.cu -o temp
 /*
  Purpose:
  To learn how to use multiple GPUs.
